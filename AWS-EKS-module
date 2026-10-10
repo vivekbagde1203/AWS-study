@@ -1,0 +1,55 @@
+Topics completed
+
+A. Terraform fundamentals
+Covered
+- Resources vs. data sources
+- Variables, locals, and outputs
+- Primitive and complex types
+- Variable precedence
+- Root modules vs. child modules
+- Module inputs and outputs
+- Implicit vs. explicit dependencies
+- count vs. for_each
+- Terraform state fundamentals and recovery considerations
+
+
+
+
+B. AWS VPC and networking
+Core concepts covered
+- VPC CIDR and subnet CIDRs
+- Public and private subnets
+- Availability Zones
+- Internet Gateway and route tables
+- Route table associations
+- NAT Gateway and Elastic IPs
+- One NAT Gateway per AZ vs. shared NAT
+- Private subnet outbound internet routing
+- VPC module outputs and subnet ID collections
+
+
+
+
+C. EKS cluster and IAM fundamentals
+Core concepts covered
+- EKS control plane vs. worker nodes
+- EKS cluster Terraform resource
+- Cluster IAM role and trust policy
+- Node IAM role and permissions
+- Managed node groups
+- Kubernetes version configuration
+- Private and public API endpoint access
+- EKS control-plane logging
+- Node registration, kubelet, and Ready status
+
+
+
+
+D. EKS networking and security
+Core concepts covered
+- Security Groups vs. Kubernetes NetworkPolicies
+- Control-plane and worker-node networking
+- Node-to-node and control-plane-to-node communication
+- VPC routing and AWS VPC CNI
+- Troubleshooting connectivity failures
+- Cluster Security Group vs. custom Security Groups
