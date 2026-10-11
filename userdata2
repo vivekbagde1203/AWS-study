@@ -1,0 +1,38 @@
+#!/bin/bash
+set -e
+
+dnf install -y nginx
+systemctl enable --now nginx
+
+TOKEN=$(curl -fsS -X PUT 
+  "http://169.254.169.254/latest/api/token" 
+  -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")
+
+INSTANCE_ID=$(curl -fsS 
+  -H "X-aws-ec2-metadata-token: $TOKEN" 
+  http://169.254.169.254/latest/meta-data/instance-id)
+
+cat > /etc/nginx/conf.d/dev-api.conf <<EOF
+server {
+    listen 80;
+    server_name _;
+
+    location = /api {
+        default_type application/json;
+        return 200 '{"application":"ABC Dev API","path":"/api","instance_id":"$INSTANCE_ID"}';
+    }
+
+    location /api/ {
+        default_type application/json;
+        return 200 '{"application":"ABC Dev API","path":"$request_uri","instance_id":"$INSTANCE_ID"}';
+    }
+
+    location / {
+        default_type text/html;
+        return 200 '<html><body><h1>ABC Technologies API Server</h1><p>Served by: $INSTANCE_ID</p></body></html>';
+    }
+}
+EOF
+
+nginx -t
+systemctl restart nginx
