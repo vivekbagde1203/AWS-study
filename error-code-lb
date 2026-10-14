@@ -1,0 +1,8 @@
+Symptom	What to check first
+503     Service Unavailable	Are there usable targets in the target group? Check listener actions and target health.
+502     Bad Gateway	Check target connectivity, application responses, protocol/port mismatch, and connection resets.
+504 Gateway Timeout	Check whether the target responds within the ALB timeout and whether the application or dependencies are slow.
+Target is unhealthy	Health-check path, expected status code, Nginx status, security-group rules, and routing.
+DNS name doesn't open	ALB state, DNS name, scheme, public subnets, IGW route, listener, and client network.
+Only one server appears	Confirm both targets are healthy and registered; account for connection reuse and the configured routing algorithm.
+HTTPS certificate error	Certificate domain coverage, ACM Region, certificate status, and listener certificate selection.
