@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>ABC Technologies Activity Dashboard</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      max-width: 800px;
+      margin: 60px auto;
+      padding: 20px;
+      background: #f4f7fb;
+    }
+    .card {
+      background: white;
+      padding: 30px;
+      border-radius: 12px;
+      box-shadow: 0 3px 12px #0001;
+    }
+    button {
+      padding: 12px 18px;
+      margin: 8px 5px 8px 0;
+      cursor: pointer;
+    }
+    #result { margin-top: 20px; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>ABC Technologies</h1>
+    <h2>Nginx Activity Dashboard</h2>
+    <p>Click a button to generate an application activity log.</p>
+
+    <button onclick="doAction('login')">Login</button>
+    <button onclick="doAction('generate-report')">Generate Report</button>
+    <button onclick="doAction('download')">Download</button>
+
+    <p id="result">Ready to record activity.</p>
+  </div>
+
+  <script>
+    async function doAction(action) {
+      const result = document.getElementById("result");
+      result.textContent = "Processing " + action + "...";
+
+      try {
+        const response = await fetch(
+          "/action?event=" + encodeURIComponent(action),
+          { cache: "no-store" }
+        );
+
+        const data = await response.json();
+        result.textContent =
+          "Action: " + data.event +
+          " | Instance: " + data.instance_id;
+      } catch (error) {
+        result.textContent = "Request failed. Check the server logs.";
+      }
+    }
+  </script>
+</body>
+</html>
