@@ -464,6 +464,458 @@ The bucket should remain private. Do not enable public access or make the object
 
 
 
+Configure IAM permissions for S3
+Your architecture will work like this:
+S3 Bucket (Private)
+  devverse-aws-lab.zip
+         |
+         | IAM Role + S3 Gateway Endpoint
+         |
+         v
+devverse-app-01 (Private EC2)
+  10.0.89.182
+         |
+         | PostgreSQL TCP 5432
+         v
+devverse-db-01 (Private EC2)
+  10.0.131.238
+
+
+Create an IAM policy
+Open AWS Console → IAM → Policies → Create policy.
+Select the JSON editor and paste the following policy.
+This assumes your bucket name is devverse-app-artifacts-956068978326-ap-south-1.
+
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "DownloadDevVerseApplication",
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetObject"
+      ],
+      "Resource": "arn:aws:s3:::devverse-app-artifacts-956068978326-ap-south-1/devverse-aws-lab.zip"
+    }
+  ]
+}
+
+Click Next, then use:
+Setting	       Value
+Policy name	   DevVerseAppS3ReadPolicy
+Description	   Allows DevVerse EC2 to download its application ZIP from S3
+Click Create policy.
+
+Attach the policy to the EC2 IAM role
+We should use a dedicated application IAM role rather than the database server's role.
+1. Navigate to IAM → Roles → Create role.
+2. Select AWS service → EC2.
+3. Attach AmazonSSMManagedInstanceCore.
+4. Attach your newly created DevVerseAppS3ReadPolicy.
+5. Name the role devverse-app-ec2-role.
+6. Click Create role.
+
+Attach the role to your application instance
+Open EC2 → Instances.
+Select devverse-app-01.
+Click Actions → Security → Modify IAM role.
+Select devverse-app-ec2-role.
+Click Update IAM role.
+
+Note: An EC2 instance can have only one IAM instance profile attached at a time. 
+If your application instance already has a role with other required permissions, review those permissions before replacing it.
+
+Download the application ZIP
+Once the role is attached, connect to devverse-app-01 using Session Manager.
+First verify AWS CLI: aws --version
+
+Then download the ZIP: 
+mkdir -p /opt/devverse
+
+aws s3 cp \
+  s3://devverse-app-artifacts-956068978326-ap-south-1/devverse-aws-lab.zip \
+  /opt/devverse/devverse-aws-lab.zip
+
+ls -lh /opt/devverse/devverse-aws-lab.zip
+
+
+
+Extract and inspect the DevVerse application
+Now we'll extract the application and understand its folder structure before installing anything.
+
+Install unzip
+On your application EC2 instance, run:
+sudo dnf install -y unzip
+
+Extract the application
+cd /opt/devverse
+unzip -o devverse-aws-lab.zip -d app
+
+Check the application files
+find /opt/devverse/app -maxdepth 3 -type f | sort
+This will show us the Flask backend, frontend, requirements file, configuration files, and deployment instructions included in the ZIP.
+
+Verify Python
+python3 --version
+
+Inspect the requirements
+Run this command on your application EC2 instance:
+cd /opt/devverse/app
+cat requirements.txt
+
+Inspect the deployment instructions
+cat deploy/amazon-linux-notes.md
+
+Check the application's database configuration
+grep -nE 'DATABASE_URL|DB_HOST|DB_NAME|DB_USER|SQLALCHEMY|psycopg|sqlite|os.getenv|os.environ' app.py
+
+
+Install Flask and Python dependencies
+First, let's prepare the application runtime. We won't configure database passwords yet.
+
+Install Python virtual environment support
+Run these commands on your application EC2 instance (ip-10-0-76-48):
+sudo dnf install -y python3 python3-pip
+
+Create a dedicated application user
+sudo useradd --system \
+  --home-dir /opt/devverse \
+  --shell /sbin/nologin devverse
+If the user already exists, that's fine.
+
+Configure application directory ownership
+sudo chown -R devverse:devverse /opt/devverse
+This allows the dedicated application user to manage the runtime files without running Flask as root.
+
+Create a Python virtual environment
+cd /opt/devverse/app
+sudo -u devverse python3 -m venv /opt/devverse/venv
+
+Install the application dependencies
+sudo -u devverse /opt/devverse/venv/bin/python -m pip install \
+  -r /opt/devverse/app/requirements.txt
+This installs Flask, Psycopg (the PostgreSQL driver), and Boto3 (the AWS SDK).
+
+Verify installation
+/opt/devverse/venv/bin/python -c \
+  "import flask, psycopg, boto3; print('SUCCESS: Flask, PostgreSQL driver, and Boto3 installed')"
+
+====================================
+
+
+Inspect the application service and database schema
+Run these commands on your application EC2 server.
+Check the systemd service
+cat /opt/devverse/app/systemd/devverse.service
+This will tell us which Python command starts the application, which user runs it, and where it reads environment variables.
+
+Check the database schema
+cat /opt/devverse/app/sql/schema.sql
+This will show us which tables need to be created in PostgreSQL.
+
+Check the application startup configuration
+tail -n 35 /opt/devverse/app/app.py
+This will help us confirm how Flask starts and which port it uses.
+
+Why are we checking these files?
+Our next deployment configuration will use:
+Setting	                Value
+Application directory	  /opt/devverse/app
+Python environment	     /opt/devverse/venv
+Database host	          10.0.131.238
+Database name	          devverse
+Database user	          devverse_app
+Environment file	       /etc/devverse/devverse.env
+Application service	     devverse.service
+
+We'll configure the database password securely and avoid exposing it in terminal history or chat output.
+For now, run those three commands and share the output. Then we'll configure the environment, initialize PostgreSQL tables, and start your DevVerse Flask application.
+We're very close to seeing your actual website running! 🚀
+
+
+Fix the systemd service configuration
+Your ZIP extracted the application into:
+/opt/devverse/app/app.py
+
+But your systemd service currently points to:
+/opt/devverse/app.py
+
+That path is incorrect. If we start the service without fixing it, Python will fail to find app.py.
+We also need to correct the working directory.
+
+Install the corrected service file
+Run these commands on your application EC2 instance:
+sudo cp /opt/devverse/app/systemd/devverse.service \
+  /etc/systemd/system/devverse.service
+
+Now create a systemd override:
+sudo mkdir -p /etc/systemd/system/devverse.service.d
+
+sudo tee /etc/systemd/system/devverse.service.d/override.conf > /dev/null <<'EOF'
+[Service]
+WorkingDirectory=/opt/devverse/app
+ExecStart=
+ExecStart=/opt/devverse/venv/bin/python /opt/devverse/app/app.py
+EOF
+
+Reload systemd: sudo systemctl daemon-reload
+
+Verify the final configuration 
+sudo systemctl cat devverse
+
+You should see the original service and the override containing:
+[Service]
+WorkingDirectory=/opt/devverse/app
+ExecStart=
+ExecStart=/opt/devverse/venv/bin/python /opt/devverse/app/app.py
+
+Do not start the service yet. The application calls init_db() during startup, and we haven't configured its PostgreSQL credentials.
+
+
+What we've learned about your application
+Component	                     Finding
+Flask application	             /opt/devverse/app/app.py
+Python virtual environment	    /opt/devverse/venv
+PostgreSQL tables	             tasks,stats
+Database initialization	       Automatic at application startup
+Flask listening address	       127.0.0.1:5000
+Environment file	              /etc/devverse/devverse.env
+S3 uploads	Currently request   SSE-KMS encryption
+
+The S3 configuration deserves attention later: your application requests SSE-KMS encryption, while the artifact bucket was configured with SSE-S3. We'll verify the bucket's encryption and KMS permissions before enabling uploads.
+
+
+Configure the DevVerse database connection
+Your application uses the DATABASE_URL environment variable to connect to PostgreSQL.
+We'll configure these values:
+
+Setting	           Value
+Database host	     10.0.131.238
+Port	              5432
+Database	          devverse
+Username	          devverse_app
+Password	          Your existing PostgreSQL password
+Environment file	  /etc/devverse/devverse.env
+
+
+Create the environment directory
+On your application EC2 instance, run:
+sudo mkdir -p /etc/devverse
+sudo chmod 700 /etc/devverse
+
+Create the environment file securely
+sudo sh -c 'umask 077; touch /etc/devverse/devverse.env'
+sudo vi /etc/devverse/devverse.env
+
+DATABASE_URL=postgresql://devverse_app:YOUR_PASSWORD@10.0.131.238:5432/devverse
+AWS_REGION=ap-south-1
+INSTANCE_ID=devverse-app-01
+
+DATABASE_URL=postgresql://devverse_app:India%40123@10.0.143.100:5432/devverse
+AWS_REGION=ap-south-1
+INSTANCE_ID=devverse-app-01
+
+Replace YOUR_PASSWORD with the actual PostgreSQL password.
+Important: If your password contains special characters such as @, #, /, ?, or %, they must be percent-encoded in the database URL. Don't share your password here.
+For now, we're leaving S3_BUCKET unset. We'll configure application file uploads separately after Flask is running.
+Save the file using Esc, :wq, and Enter.
+India@123
+India%40123
+
+Restrict access to the environment file
+sudo chown root:root /etc/devverse/devverse.env
+sudo chmod 600 /etc/devverse/devverse.env
+
+Verify permissions without displaying the password:
+sudo ls -l /etc/devverse/devverse.env
+
+The devverse application user does not need direct read access to this file. Systemd reads it and supplies the variables to the service process.
+
+Verify the file contains the required variable
+Run this command, which displays only the variable names:
+sudo awk -F= '/^[A-Za-z_][A-Za-z0-9_]*=/ {print $1}' /etc/devverse/devverse.env
+
+Start the DevVerse Flask application
+Now we'll start the application for the first time!
+Your Flask application calls init_db() during startup, so it should automatically create the tasks and stats tables in PostgreSQL.
+
+Start the application
+Run these commands on your application EC2 instance:
+sudo systemctl daemon-reload
+sudo systemctl enable --now devverse
+
+Check application status
+sudo systemctl status devverse --no-pager -l
+
+Test the Flask health endpoint
+Your Flask application is configured to listen on 127.0.0.1:5000.
+
+curl -i http://127.0.0.1:5000/api/health
+If successful, you should receive an HTTP 200 OK response with JSON showing the application health.
+
+Check application logs if necessary
+If the service fails or the health endpoint doesn't respond, run:
+sudo journalctl -u devverse -n 30 --no-pager
+
+==================================>
+Application EC2 — 10.0.76.48
+Flask running on 127.0.0.1:5000
+
+PostgreSQL EC2 — Private subnet
+Database: devverse
+==================================>
+sudo -u postgres psql -tAc "SHOW hba_file;"
+edit this file
+
+Add localhost
+sudo -u postgres psql -c \
+"SELECT line_number, type, database, user_name, address, auth_method
+ FROM pg_hba_file_rules
+ ORDER BY line_number;"
+
+vi /data/postgresql/pgdata/pg_hba.conf
+
+We want local TCP connections for devverse_app to use password authentication with scram-sha-256.
+
+In pg_hba.conf, add this rule above any broader localhost ident rules:
+host    devverse    devverse_app    127.0.0.1/32    scram-sha-256
+Keep the existing local authentication rule for the PostgreSQL administrator unchanged.
+
+sudo -u postgres psql -c "SELECT pg_reload_conf();"
+
+Verify PostgreSQL tables
+Before configuring Nginx, let's confirm that Flask successfully created the application tables in PostgreSQL.
+Run the following on your database EC2 instance, using the database user you configured:
+psql -h 127.0.0.1 -U devverse_app -d devverse -W
+psql -h 127.0.0.1 -U devverse_app -d devverse -W
+
+\dt
+SELECT * FROM stats;
+
+
+Configure Nginx on the Application EC2
+Now we'll make the DevVerse website accessible through Nginx.
+Our target architecture for this step:
+
+Nginx Web Server
+Port 80 — serves website files
+
+Flask API
+Port 5000 — handles application requests
+
+PostgreSQL Database
+Port 5432 — stores application data
+
+Install Nginx
+First, exit PostgreSQL:
+
+\q
+
+Then return to your application EC2 instance (10.0.76.48), not the database EC2.
+Run:
+sudo dnf install nginx -y
+
+Verify the installation: nginx -v
+
+Inspect the existing Nginx configuration
+Your DevVerse application package already contains an Nginx configuration file.
+Let's inspect it before installing it:
+cat /opt/devverse/app/nginx/devverse.conf
+
+Also check the website files:
+ls -lh /opt/devverse/app/static/
+
+
+Copy the configuration
+Run these commands on your application EC2 (10.0.76.48):
+sudo cp /opt/devverse/app/nginx/devverse.conf \
+  /etc/nginx/conf.d/devverse.conf
+
+Correct the document root:
+sudo sed -i \
+  's|root /opt/devverse/static;|root /opt/devverse/app/static;|' \
+  /etc/nginx/conf.d/devverse.conf
+
+Check for conflicting Nginx server configurations
+Because your DevVerse configuration uses listen 80 default_server, we must ensure another default server isn't already configured.
+sudo grep -RnE 'listen[[:space:]]+80|default_server' \
+  /etc/nginx/nginx.conf /etc/nginx/conf.d/
+
+If /etc/nginx/nginx.conf already defines a default server on port 80, we'll need to resolve that conflict.
+
+Validate the Nginx configuration
+sudo nginx -t
+
+Check static-file directory permissions
+Nginx must be able to traverse the directories leading to your website files.
+
+namei -l /opt/devverse/app/static/index.html
+
+
+Fix the Nginx server conflict
+Why is this happening?
+You currently have two Nginx server configurations:
+File	Configuration
+/etc/nginx/nginx.conf	Default Nginx server on port 80
+/etc/nginx/conf.d/devverse.conf	DevVerse server on port 80
+
+Both use the server name _, which causes the warning.
+Our goal is to use the DevVerse configuration as the default web server.
+
+Open the main Nginx configuration
+sudo vi /etc/nginx/nginx.conf
+Find the existing server block, which should look similar to:
+server {
+    listen       80;
+    listen       [::]:80;
+    server_name  _;
+    root         /usr/share/nginx/html;
+
+    ...
+}
+
+Comment out the entire existing default server { ... } block.
+
+Important: Do not remove the surrounding http { ... } block, the include /etc/nginx/conf.d/*.conf; directive, or other global settings.
+
+Leave the DevVerse configuration in:
+/etc/nginx/conf.d/devverse.conf
+
+Validate Nginx again
+sudo nginx -t
+
+Start Nginx
+systemctl enable --now nginx
+systemctl status nginx --no-pager -l
+
+Test the DevVerse website
+curl -I http://127.0.0.1/
+curl -i http://127.0.0.1/api/health
+========================================
+Create an AWS Application Load Balancer
+Create the target group
+
+Select Create target group and configure:
+Setting	              Value
+Target type	          Instances
+Target group name	    devverse-app-tg
+Protocol	             HTTP
+Port	                 80
+IP address type	      IPv4
+VPC	Your DevVerse     VPC
+Protocol version	     HTTP1
+Health check protocol	HTTP
+Health check path	    /api/health
+Success codes	        200
+
+Leave the other health-check settings at their defaults.
+Select Next.
+Register your application EC2 instance
+Under Available instances:
+1. Select your application EC2 instance (10.0.76.48).
+2. Keep port 80.
+3. Select Include as pending below.
+4. Select Create target group.
 
 
 
