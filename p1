@@ -1,0 +1,472 @@
+1. Create VPC with CIDR 10.0.0.0/16
+2. Create Subnet
+Subnet name                   IPv4 CIDR         Availability Zone
+devverse-public-a             10.0.0.0/19       AZ-A
+devverse-public-b             10.0.32.0/19      AZ-B
+devverse-app-private-a        10.0.64.0/19      AZ-A
+devverse-app-private-b        10.0.96.0/19      AZ-B
+devverse-db-private-a         10.0.128.0/19     AZ-A
+devverse-db-private-b         10.0.160.0/19     AZ-B
+Choose two different Availability Zones for AZ-A and AZ-B. Use those same two AZs consistently for the application and database subnets.
+
+Important settings
+- Keep all six subnets in the same VPC.
+- Leave auto-assign public IPv4 disabled on the private application and database subnets.
+- We'll configure public IP behavior and routing for the public subnets separately.
+
+Verify your subnets
+Once created, open VPC → Subnets and confirm that all six subnets show the correct CIDRs and VPC ID.
+
+3. Create Internet Gateway for VPC
+Create and attach an Internet Gateway (IGW)
+Follow these steps in the AWS Console
+1. Open VPC → Internet gateways.
+2. Click Create internet gateway.
+3. Set the name tag to devverse-igw.
+4. Click Create internet gateway.
+5. Select devverse-igw, choose Actions → Attach to a VPC.
+6. Select your DevVerse VPC (10.0.0.0/16) and confirm the attachment.
+
+Verify the result
+Your Internet Gateway should show:
+- Name: devverse-igw
+- State: Attached
+- VPC: Your DevVerse VPC
+
+4. Create the public route table
+Follow these steps in AWS Console
+1. Open VPC → Route tables.
+2. Click Create route table.
+3. Enter the name devverse-public-rt.
+4. Select your DevVerse VPC (10.0.0.0/16) and create it.
+5. Open the new route table, select Routes → Edit routes → Add route.
+6. Set the destination to 0.0.0.0/0 and the target to your devverse-igw Internet Gateway.
+7. Save changes.
+
+Associate both public subnets
+In the same route table, open Subnet associations → Edit subnet associations and select:
+- devverse-public-a — 10.0.0.0/19
+- devverse-public-b — 10.0.32.0/19
+Save the associations.
+
+Verify your routes
+Your route table should now contain these two routes:
+Destination Target
+10.0.0.0/16 local
+0.0.0.0/0 devverse-igw
+The first route is created automatically by AWS. The second is the route you added.
+
+Create Elastic IP addresses (2)
+Create the NAT Gateway (2)
+
+5. Create Private Route Table
+We'll create two separate route tables, one for each Availability Zone. This keeps outbound traffic within its own AZ during normal operation.
+Part A — Create route table A
+1. Open VPC → Route tables → Create route table.
+2. Name: devverse-app-rt-a
+3. Select your DevVerse VPC.
+4. Create the route table.
+5. Open Routes → Edit routes → Add route.
+6. Destination: 0.0.0.0/0
+7. Target: select NAT Gateway → devverse-nat-a.
+8. Save changes.
+9. Open Subnet associations → Edit subnet associations.
+10. Select only devverse-app-private-a (10.0.64.0/19) and save.
+
+Part B — Create route table B
+Repeat with these settings:
+Setting Value
+Route table devverse-app-rt-b
+Default route 0.0.0.0/0
+Target devverse-nat-b
+Associated subnet devverse-app-private-b (10.0.96.0/19)
+
+Verify the configuration
+Destination    App RT-A     App RT-B
+10.0.0.0/16   Local               Local
+0.0.0.0/0         NAT-A            NAT-B
+
+Why are we doing this? When an EC2 instance in AZ-A downloads a package, the request goes through NAT-A. The NAT Gateway translates the source address for internet communication, and the response returns through the established connection. The EC2 instance still has no public IP address.
+
+Create the database subnet
+Use devverse-db-private-a (10.0.128.0/19) for the database EC2 instance.
+Keep devverse-db-private-b (10.0.160.0/19) available for future database high availability or RDS learning.
+
+6. Create three security groups
+Create these groups in your DevVerse VPC (10.0.0.0/16).
+Security group      Name                                      Inbound rule
+Load Balancer.      devverse-alb-sg                HTTP 80 from 0.0.0.0/0 for initial testing
+Application             devverse-app-sg              TCP 80 from devverse-alb-sg only
+Database                 devverse-db-sg                 PostgreSQL TCP 5432 from devverse-app-sg only
+For all three, select your DevVerse VPC. Keep the default outbound rules for this initial lab
+
+We'll launch one private EC2 instance, attach encrypted EBS storage, and install PostgreSQL on it.
+Our application instances will connect to this server over the VPC's private network.
+
+7. Launch the PostgreSQL EC2 instance
+Part A — Launch the instance
+Open AWS Console → EC2 → Instances → Launch instances.
+
+Name
+devverse-db-01
+
+Create a additional volume of 20GB and attach to postgresql ec2 instance.
+
+Create the EBS volume
+In the AWS Console:
+1. Open EC2 → Elastic Block Store → Volumes.
+2. Click Create volume.
+3. Set the following values:
+
+Setting                           Value
+Volume type               gp3
+Size                                  20 GiB
+Availability Zone     The same AZ as devverse-db-01
+Name tag                      devverse-db-data
+
+Create the volume.
+An EBS volume must be in the same Availability Zone as the EC2 instance to which you attach it.
+
+Part B - Attach the volume
+Select the new devverse-db-data volume.
+Choose Actions → Attach volume.
+Select devverse-db-01.
+Keep the suggested device name, such as /dev/sdb.
+Click Attach volume.
+Wait for the volume state to become In-use.
+
+Part C — Verify the disk from the instance
+
+$lsblk
+Look for a disk approximately 20 GiB in size. On Nitro-based instances,
+an EBS volume may appear as /dev/nvme1n1 instead of the requested /dev/sdf.
+
+$lsblk -o NAME,SIZE,FSTYPE,MOUNTPOINTS
+
+You should see a root disk and your additional 20 GiB disk.
+On many AWS Nitro instances, the additional disk appears as /dev/nvme1n1, but the name can differ.
+
+sudo file -s /dev/nvme1n1
+
+Format and mount the confirmed disk
+sudo mkfs -t xfs /dev/nvme1n1
+
+Create a mount point:
+sudo mkdir -p /data/postgresql/pgdata
+
+Mount the volume:
+sudo mount /dev/nvme1n1 /data/postgresql/pgdata
+
+df -hT /data/postgresql/pgdata
+
+Make the mount persistent after reboot
+sudo blkid /dev/nvme1n1
+
+============================================================
+sudo nano /etc/fstab
+
+#############Add this line, replacing YOUR-UUID with the actual UUID:
+UUID=YOUR-UUID /data/postgresql/pgdata xfs defaults,nofail 0 2
+
+Save the file, then test the configuration:
+============================================================
+
+If the mount succeeds, your volume is configured to mount again after reboot.
+
+============================================================
+
+#Install Postgres Database:->
+
+#Update the package metadata:
+sudo dnf makecache
+
+#Search for PostgreSQL server packages:
+sudo dnf search postgresql
+
+#Install PostgreSQL:
+sudo dnf install -y postgresql15-server
+
+postgres --version
+
+#We'll initialize PostgreSQL on the separate disk rather than the root disk.
+Check the current PostgreSQL data directory
+sudo grep -E '^(PGDATA|Environment=PGDATA)' \
+/usr/lib/systemd/system/postgresql.service \
+/etc/sysconfig/pgsql/postgresql 2>/dev/null
+
+
+Then check whether the default data directory already contains a database:
+sudo ls -la /var/lib/pgsql/data
+
+Check ownership of the EBS mount
+sudo ls -ld /data/postgresql/pgdata
+
+Configure PostgreSQL storage
+We'll use /data/postgresql/pgdata as the database directory. Follow these commands in order on devverse-db-01.
+
+Stop PostgreSQL if it is running
+sudo systemctl stop postgresql
+
+Set ownership and permissions
+PostgreSQL runs as the Linux user postgres, so it needs permission to access the EBS volume.
+
+sudo chown postgres:postgres /data/postgresql/pgdata
+sudo chmod 700 /data/postgresql/pgdata
+
+ls -ld /data/postgresql/pgdata
+Expected ownership: postgres postgres.
+
+Configure the PostgreSQL service
+systemctl edit postgresql
+[Service]
+Environment=PGDATA=/data/postgresql/pgdata
+
+systemctl daemon-reload
+systemctl show postgresql -p Environment
+You should see PGDATA=/data/postgresql/pgdata
+
+Initialize the database
+postgresql-setup --initdb
+This creates PostgreSQL's initial database cluster on the EBS volume.
+
+ 
+
+Start PostgreSQL
+systemctl enable --now postgresql
+systemctl start postgresql
+systemctl status postgresql --no-pager
+
+sudo -u postgres psql -c "SHOW data_directory;"
+
+1. Create the DevVerse database and user
+sudo -u postgres psql
+
+You should see a prompt similar to:
+postgres=#
+
+2. Create a dedicated application user
+At the PostgreSQL prompt, run:
+
+CREATE USER devverse_app WITH LOGIN;
+
+Set a password interactively:
+\password devverse_app
+
+Enter a strong password twice. PostgreSQL will prompt you securely, so the password won't appear in the command history.
+
+3. Create the database
+CREATE DATABASE devverse OWNER devverse_app;
+
+This creates the devverse database and makes devverse_app its owner.
+
+4. Verify the database
+\l
+
+You should see devverse in the database list, owned by devverse_app.
+
+Exit the PostgreSQL console:
+\q
+
+5. Confirm the service is still running
+sudo systemctl is-active postgresql
+
+Configure PostgreSQL for private connections
+
+1. Verify your database
+Connect to devverse-db-01 using Session Manager and run:
+sudo -u postgres psql -c "\l"
+
+Confirm that the devverse database exists.
+
+2. Check PostgreSQL's listening configuration
+Run:
+sudo -u postgres psql -c "SHOW listen_addresses;"
+
+If it returns localhost, PostgreSQL is currently listening only on the local machine.
+We'll configure it to listen on the private network interface.
+
+3. Find the PostgreSQL configuration file
+sudo -u postgres psql -c "SHOW config_file;"
+
+Then:
+sudo -u postgres psql -c "SHOW hba_file;"
+
+These commands show us the exact configuration-file paths for your installation.
+
+4. Verify the database security group
+In the AWS Console, go to EC2 → Security Groups → devverse-db-sg → Inbound rules.
+Confirm this rule exists:
+| Type | Protocol | Port | Source |
+|------|----------|-----:|--------|
+| PostgreSQL | TCP | 5432 | `devverse-app-sg` |
+
+The source should be the application security group, not 0.0.0.0/0.
+
+Run these three commands on devverse-db-01 and paste the results:
+sudo -u postgres psql -c "\l"
+sudo -u postgres psql -c "SHOW config_file;"
+sudo -u postgres psql -c "SHOW hba_file;"
+
+Update PostgreSQL configuration to listen from all
+sudo -u postgres psql -c "ALTER SYSTEM SET listen_addresses = '*';"
+
+Then restart PostgreSQL:
+sudo systemctl restart postgresql
+
+sudo -u postgres psql -c "SHOW listen_addresses;"
+
+
+Now let's configure secure access from the DevVerse application
+Configure PostgreSQL client authentication
+PostgreSQL uses pg_hba.conf to decide which clients can connect and how they authenticate.
+/data/postgresql/pgdata/pg_hba.conf
+
+Check the current rules
+sudo -u postgres psql -c "SELECT * FROM pg_hba_file_rules;"
+
+This displays the configured authentication rules and any parsing errors.
+
+Allow connections from the application subnet
+Your application private subnets are:
+- devverse-app-private-a: 10.0.64.0/19
+- devverse-app-private-b: 10.0.96.0/19
+We'll allow the devverse_app database user to connect only to the devverse database from these subnets,
+using password authentication.
+
+Add the authentication rules
+Run this command on your DB EC2 instance:
+sudo tee -a /data/postgresql/pgdata/pg_hba.conf > /dev/null <<'EOF'
+
+# DevVerse application servers
+host devverse devverse_app 10.0.64.0/19 scram-sha-256
+host devverse devverse_app 10.0.96.0/19 scram-sha-256
+host devverse devverse_app 172.31.32.0/20 scram-sha-256
+host devverse devverse_app 172.31.16.0/20 scram-sha-256
+host devverse devverse_app 172.31.0.0/20 scram-sha-256
+EOF
+
+These rules restrict database authentication by database name, username, and source subnet.
+
+Reload PostgreSQL configuration
+sudo systemctl reload postgresql
+
+Verify the new rules
+sudo -u postgres psql -c "SELECT line_number, type, database, user_name, address, auth_method, error FROM pg_hba_file_rules ORDER BY line_number;"
+
+Verify the database user's password
+sudo -u postgres psql -c "SELECT rolname, rolcanlogin, rolpassword IS NOT NULL AS password_configured FROM pg_authid WHERE rolname = 'devverse_app';"
+
+Expected output should look like this:
+rolname | rolcanlogin | password_configured
+--------------+-------------+---------------------
+devverse_app | t | t
+
+- rolcanlogin = t means the user can log in.
+- password_configured = t means a password verifier exists. It does not reveal the password.
+
+=================================================>
+Now create instance in private subnet-1 and wait to come up.
+Give instancecore and s3fullpermission role to ec2 instance.
+
+now in new app instance -> cat /etc/os-release
+
+Install the PostgreSQL client in app ec2 instance deployed in private-subnet-1
+sudo dnf install postgresql15 -y
+
+Verify the installation:
+psql --version
+
+Test connectivity to PostgreSQL from application ec2 instance.
+Run the network test
+nc -zv -w 5 10.0.94.153 5432
+
+If nc is not installed, use this command instead:
+timeout 5 bash -c '</dev/tcp/10.0.94.153/5432' \
+&& echo "SUCCESS: PostgreSQL port is reachable" \
+|| echo "FAILED: PostgreSQL port is not reachable"
+
+Connect to PostgreSQL
+Run this command on your application EC2 instance:
+psql -h 10.0.131.238 -p 5432 -U devverse_app -d devverse -W
+
+It will ask for password -> India@123
+
+SELECT
+current_database(),
+current_user,
+inet_server_addr(),
+inet_server_port();
+
+\q
+
+
+===============================>
+Upload the application ZIP to Amazon S3
+devverse-aws-lab.zip
+
+Create an S3 bucket-> devverse-app-artifacts-956068978326-ap-south-1
+Open the AWS Console.
+Make sure the region is Asia Pacific (Mumbai) — ap-south-1.
+Search for S3 and open the service.
+Click Create bucket.
+
+Create an S3 VPC Gateway Endpoint
+An S3 Gateway Endpoint lets resources in your VPC access S3 through private routing. It doesn't require a NAT Gateway for S3 traffic.
+
+
+Open VPC Endpoints
+Open the AWS Console in Mumbai (ap-south-1).
+Navigate to VPC → Endpoints.
+Click Create endpoint.
+
+Configure the endpoint
+Name tag                           devverse-s3-endpoint
+Service category           AWS services
+Services                              Search for s3
+Service name                   com.amazonaws.ap-south-1.s3
+Type                                      Gateway
+VPC Your                           DevVerse VPC
+Route tables Select the route tables associated with devverse-app-private-a and devverse-app-private-b
+
+Important: Select the two application private route tables:
+- devverse-app-rt-a
+- devverse-app-rt-b
+
+Do not select the public route table for this step.
+Keep the default policy if you want to start with standard S3 access, or use a restricted policy later.
+===========================================================================>
+
+Upload the application ZIP to S3
+We'll complete this in three small stages:
+
+Upload the ZIP from your Mac to the private S3 bucket.
+Give the application EC2 instance permission to download it using an IAM role.
+Download and extract the ZIP on the instance.
+First, let's upload the file.
+
+Open your S3 bucket
+Open the AWS Console.
+Navigate to S3 → General purpose buckets.
+Open the bucket you created for DevVerse. Its intended name was:
+
+devverse-app-artifacts-956068978326-ap-south-1
+
+Click Upload.
+Under Files and folders, click Add files.
+Select devverse-aws-lab.zip from your Mac.
+Keep the bucket private and leave the default encryption settings unchanged.
+Click Upload.
+Wait until the upload completes successfully.
+
+ Verify the upload
+Inside your S3 bucket, you should see an object named: devverse-aws-lab.zip
+The bucket should remain private. Do not enable public access or make the object public.
+
+
+
+
+
+
+
+
+
