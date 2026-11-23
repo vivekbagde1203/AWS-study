@@ -1,0 +1,171 @@
+
+pipeline {
+    agent any
+
+    tools {
+        jdk 'JDK-17'
+        maven 'Maven-3'
+    }
+
+    options {
+        skipDefaultCheckout(true)
+        timestamps()
+    }
+
+    parameters {
+        string(
+            name: 'IMAGE_TAG',
+            defaultValue: '1.0.0',
+            description: 'Enter Docker image tag'
+        )
+
+        choice(
+            name: 'DEPLOY_ENV',
+            choices: ['DEV', 'QA'],
+            description: 'Select environment'
+        )
+    }
+
+    environment {
+        IMAGE_NAME = 'student-management'
+        DOCKER_NETWORK = 'studenthub-net'
+    }
+
+    stages {
+        stage('Check Tools') {
+            steps {
+                sh '''
+                    java -version
+                    mvn -version
+                    docker --version
+                '''
+            }
+        }
+
+        stage('Checkout') {
+            steps {
+                git branch: 'master',
+                    url: 'https://github.com/vivekbagde1203/student-management.git'
+            }
+        }
+
+        stage('Compile') {
+            steps {
+                sh 'mvn clean compile'
+            }
+        }
+
+        stage('Test') {
+            steps {
+                sh 'mvn test'
+            }
+        }
+
+        stage('Package') {
+            steps {
+                sh 'mvn package'
+            }
+        }
+
+        stage('Archive JAR') {
+            steps {
+                archiveArtifacts(
+                    artifacts: 'target/*.jar',
+                    fingerprint: true
+                )
+            }
+        }
+
+        stage('Build Docker Image') {
+            steps {
+                script {
+                    if (!(params.IMAGE_TAG ==~
+                        /[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}/)) {
+                        error('Invalid Docker image tag')
+                    }
+                }
+
+                sh '''
+                    set -eu
+
+                    test -f target/student-management-1.0.0.jar
+                    test -f Dockerfile
+
+                    docker build \
+                      -t "${IMAGE_NAME}:${IMAGE_TAG}" .
+                '''
+            }
+        }
+
+        stage('Deploy Docker Container') {
+            steps {
+                withCredentials([
+                    string(
+                        credentialsId: 'studenthub-db-password',
+                        variable: 'DB_PASSWORD'
+                    )
+                ]) {
+                    sh '''
+                        set -eu
+                        set +x
+
+                        case "$DEPLOY_ENV" in
+                            DEV)
+                                CONTAINER="student-management-dev"
+                                HOST_PORT="8082"
+                                ;;
+                            QA)
+                                CONTAINER="student-management-qa"
+                                HOST_PORT="8083"
+                                ;;
+                            *)
+                                echo "Invalid environment"
+                                exit 1
+                                ;;
+                        esac
+
+                        docker network inspect \
+                          "$DOCKER_NETWORK" >/dev/null
+
+                        if docker container inspect \
+                          "$CONTAINER" >/dev/null 2>&1; then
+                            docker rm -f "$CONTAINER"
+                        fi
+
+                        docker run -d \
+                          --name "$CONTAINER" \
+                          --network "$DOCKER_NETWORK" \
+                          -p "127.0.0.1:${HOST_PORT}:8081" \
+                          -e DB_URL=jdbc:postgresql://studenthub-db:5432/studenthub \
+                          -e DB_USERNAME=studenthub \
+                          -e DB_PASSWORD \
+                          "${IMAGE_NAME}:${IMAGE_TAG}"
+
+                        sleep 12
+
+                        docker ps --filter "name=$CONTAINER"
+
+                        curl --fail --silent --show-error \
+                          --max-time 10 \
+                          "http://127.0.0.1:${HOST_PORT}/" \
+                          -o /dev/null
+                    '''
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            echo 'Pipeline completed successfully!'
+        }
+
+        failure {
+            echo 'Pipeline failed. Check the console logs.'
+        }
+
+        always {
+            echo 'Pipeline execution finished.'
+        }
+    }
+}
