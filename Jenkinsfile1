@@ -1,0 +1,31 @@
+
+pipeline {
+    agent any
+
+    stages {
+        stage('Check Tools') {
+            steps {
+                sh '''
+                    echo "Checking Java..."
+                    java -version
+
+                    echo "Checking Maven..."
+                    mvn -version
+
+                    echo "Checking Docker..."
+                    docker --version
+                '''
+            }
+        }
+
+        stage('Check Server') {
+            steps {
+                sh '''
+                    hostname
+                    whoami
+                    pwd
+                '''
+            }
+        }
+    }
+}
