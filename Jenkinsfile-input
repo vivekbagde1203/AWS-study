@@ -1,0 +1,41 @@
+
+pipeline {
+    agent any
+
+    stages {
+        stage('Build') {
+            steps {
+                echo 'Building application'
+            }
+        }
+
+        stage('Test') {
+            steps {
+                echo 'Testing application'
+            }
+        }
+
+        stage('Manual Approval') {
+            steps {
+                input message: 'Do you approve QA deployment?',
+                      ok: 'Deploy to QA'
+            }
+        }
+
+        stage('Deploy QA') {
+            steps {
+                echo 'Deploying application to QA'
+            }
+        }
+    }
+
+    post {
+        success {
+            echo 'Deployment successful'
+        }
+
+        aborted {
+            echo 'Deployment aborted'
+        }
+    }
+}
