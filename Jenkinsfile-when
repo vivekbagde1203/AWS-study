@@ -1,0 +1,62 @@
+
+pipeline {
+    agent any
+
+    parameters {
+        choice(
+            name: 'DEPLOY_ENV',
+            choices: ['DEV', 'QA', 'PROD'],
+            description: 'Select deployment environment'
+        )
+    }
+
+    stages {
+        stage('Build') {
+            steps {
+                echo 'Building application'
+            }
+        }
+
+        stage('Deploy DEV') {
+            when {
+                expression {
+                    params.DEPLOY_ENV == 'DEV'
+                }
+            }
+
+            steps {
+                echo 'Deploying to DEV'
+            }
+        }
+
+        stage('Deploy QA') {
+            when {
+                expression {
+                    params.DEPLOY_ENV == 'QA'
+                }
+            }
+
+            steps {
+                echo 'Deploying to QA'
+            }
+        }
+
+        stage('Deploy PROD') {
+            when {
+                expression {
+                    params.DEPLOY_ENV == 'PROD'
+                }
+            }
+
+            steps {
+                echo 'Deploying to PROD'
+            }
+        }
+    }
+
+    post {
+        success {
+            echo 'Pipeline successful'
+        }
+    }
+}
